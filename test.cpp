@@ -1,132 +1,139 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <cryptopp/rsa.h>
 #include <cryptopp/osrng.h>
 #include <cryptopp/sha.h>
 #include <cryptopp/aes.h>
+#include <cryptopp/chacha.h>
 #include <cryptopp/filters.h>
 #include <cryptopp/hex.h>
 #include <cryptopp/modes.h>
 #include <cryptopp/pssr.h>
-#include <cryptopp/files.h>
 #include <cryptopp/secblock.h>
 
 using namespace CryptoPP;
 using namespace std;
 
-// Mocked Kyber-like public key (just random bytes for this example)
-string generateKyberPublicKey(size_t len = 32) {
+// Generate mock Kyber-like public key
+string generateMockPublicKey(size_t length = 32) {
     AutoSeededRandomPool rng;
-    SecByteBlock key(len);
+    SecByteBlock key(length);
     rng.GenerateBlock(key, key.size());
-
-    string encoded;
-    StringSource(key, key.size(), true, new HexEncoder(new StringSink(encoded)));
-    return encoded;
+    return string((const char*)key.BytePtr(), key.size());
 }
 
-// Derive AES key from Kyber public key (via SHA256)
-SecByteBlock deriveAESKeyFromKyber(const string& kyberPubKey) {
+// Derive key and permutation from public key
+pair<SecByteBlock, vector<string>> deriveKeyAndOrder(const string& pubKey) {
     SHA256 hash;
-    SecByteBlock aesKey(AES::DEFAULT_KEYLENGTH);
-    hash.CalculateDigest(aesKey, (const byte*)kyberPubKey.data(), kyberPubKey.size());
-    return aesKey;
+    SecByteBlock derivedKey(AES::DEFAULT_KEYLENGTH);
+    hash.CalculateDigest(derivedKey, (const byte*)pubKey.data(), pubKey.size());
+
+    // Create a simple permutation based on the hash
+    vector<string> order = {"AES", "ChaCha"};
+    int mod = derivedKey[0] % 2;
+    if (mod == 1) std::swap(order[0], order[1]);
+
+    return {derivedKey, order};
 }
 
-// AES Encrypt message
-string aesEncrypt(const string& message, const SecByteBlock& key, byte iv[AES::BLOCKSIZE]) {
-    string ciphertext;
+// AES CBC Encrypt
+string aesEncrypt(const string& input, const SecByteBlock& key, byte iv[AES::BLOCKSIZE]) {
     CBC_Mode<AES>::Encryption enc;
     enc.SetKeyWithIV(key, key.size(), iv);
-
-    StringSource(message, true,
-        new StreamTransformationFilter(enc, new StringSink(ciphertext))
-    );
-    return ciphertext;
+    string output;
+    StringSource(input, true, new StreamTransformationFilter(enc, new StringSink(output)));
+    return output;
 }
 
-// AES Decrypt message
-string aesDecrypt(const string& ciphertext, const SecByteBlock& key, byte iv[AES::BLOCKSIZE]) {
-    string recovered;
+// AES CBC Decrypt
+string aesDecrypt(const string& input, const SecByteBlock& key, byte iv[AES::BLOCKSIZE]) {
     CBC_Mode<AES>::Decryption dec;
     dec.SetKeyWithIV(key, key.size(), iv);
-
-    StringSource(ciphertext, true,
-        new StreamTransformationFilter(dec, new StringSink(recovered))
-    );
-    return recovered;
+    string output;
+    StringSource(input, true, new StreamTransformationFilter(dec, new StringSink(output)));
+    return output;
 }
 
-// Sign data with RSA private key
-string signMessage(const string& message, const RSA::PrivateKey& privateKey) {
+// ChaCha20 Encrypt/Decrypt
+string chachaTransform(const string& input, const SecByteBlock& key, byte nonce[ChaCha::IV_LENGTH]) {
+    string output;
+    ChaCha::Encryption chacha;
+    chacha.SetKeyWithIV(key, key.size(), nonce);
+    StringSource(input, true, new StreamTransformationFilter(chacha, new StringSink(output)));
+    return output;
+}
+
+// RSA sign
+string sign(const string& msg, const RSA::PrivateKey& priv) {
     AutoSeededRandomPool rng;
     string signature;
-
-    RSASS<PSS, SHA256>::Signer signer(privateKey);
-    StringSource(message, true,
-        new SignerFilter(rng, signer, new StringSink(signature))
-    );
+    RSASS<PSS, SHA256>::Signer signer(priv);
+    StringSource(msg, true, new SignerFilter(rng, signer, new StringSink(signature)));
     return signature;
 }
 
-// Verify signature with RSA public key
-bool verifySignature(const string& message, const string& signature, const RSA::PublicKey& publicKey) {
-    RSASS<PSS, SHA256>::Verifier verifier(publicKey);
+// RSA verify
+bool verify(const string& msg, const string& sig, const RSA::PublicKey& pub) {
+    RSASS<PSS, SHA256>::Verifier verifier(pub);
     bool result = false;
-
-    StringSource(signature + message, true,
-        new SignatureVerificationFilter(verifier,
-            new ArraySink((byte*)&result, sizeof(result)),
-            SignatureVerificationFilter::SIGNATURE_AT_BEGIN
-        )
-    );
+    StringSource(sig + msg, true, new SignatureVerificationFilter(
+        verifier, new ArraySink((byte*)&result, sizeof(result)),
+        SignatureVerificationFilter::SIGNATURE_AT_BEGIN));
     return result;
 }
 
 int main() {
     AutoSeededRandomPool rng;
 
-    // === Generate RSA keypair ===
-    RSA::PrivateKey rsaPrivKey;
-    rsaPrivKey.GenerateRandomWithKeySize(rng, 2048);
-    RSA::PublicKey rsaPubKey(rsaPrivKey);
+    // RSA keys
+    RSA::PrivateKey priv;
+    priv.GenerateRandomWithKeySize(rng, 2048);
+    RSA::PublicKey pub(priv);
 
-    // === Mock Kyber public key ===
-    string kyberPubKey = generateKyberPublicKey();
+    // Generate mock public key (Kyber-style)
+    string mockPubKey = generateMockPublicKey();
+    auto [derivedKey, order] = deriveKeyAndOrder(mockPubKey);
 
-    // === Derive AES key from "Kyber" public key ===
-    SecByteBlock aesKey = deriveAESKeyFromKyber(kyberPubKey);
+    // Display algorithm order
+    cout << "🔁 Encryption order: ";
+    for (auto& algo : order) cout << algo << " ";
+    cout << "\n";
 
-    // === Create IV ===
-    byte iv[AES::BLOCKSIZE];
-    rng.GenerateBlock(iv, AES::BLOCKSIZE);
+    // IVs and nonces
+    byte aesIV[AES::BLOCKSIZE]; rng.GenerateBlock(aesIV, AES::BLOCKSIZE);
+    byte chachaNonce[ChaCha::IV_LENGTH]; rng.GenerateBlock(chachaNonce, ChaCha::IV_LENGTH);
 
-    // === Original message ===
-    string message = "Post-Quantum Hybrid Crypto!";
-    cout << "Original: " << message << endl;
+    // Original message
+    string message = "Hybrid PQC Simulation!";
+    cout << "📤 Original: " << message << "\n";
 
-    // === Encrypt with AES derived from Kyber ===
-    string ciphertext = aesEncrypt(message, aesKey, iv);
+    // === Encrypt in permuted order ===
+    string encrypted = message;
+    for (const auto& algo : order) {
+        if (algo == "AES")
+            encrypted = aesEncrypt(encrypted, derivedKey, aesIV);
+        else if (algo == "ChaCha")
+            encrypted = chachaTransform(encrypted, derivedKey, chachaNonce);
+    }
 
-    // === Sign the ciphertext with RSA ===
-    string signature = signMessage(ciphertext, rsaPrivKey);
+    // Sign the final encrypted data
+    string signature = sign(encrypted, priv);
 
-    // === Simulate transfer of data ===
-    // Send: ciphertext, signature, RSA public key, IV, kyberPubKey
-
-    // === Receiver side ===
-    // Derive key again from kyberPubKey
-    SecByteBlock receiverAESKey = deriveAESKeyFromKyber(kyberPubKey);
-
-    // Verify RSA Signature
-    bool valid = verifySignature(ciphertext, signature, rsaPubKey);
-    cout << (valid ? "✅ Signature verified!" : "❌ Signature invalid!") << endl;
+    // === Decrypt in reverse order ===
+    string received = encrypted;
+    bool valid = verify(received, signature, pub);
+    cout << (valid ? "✅ Signature valid!\n" : "❌ Signature failed!\n");
 
     if (valid) {
-        // Decrypt AES ciphertext
-        string recovered = aesDecrypt(ciphertext, receiverAESKey, iv);
-        cout << "Recovered: " << recovered << endl;
+        for (auto it = order.rbegin(); it != order.rend(); ++it) {
+            if (*it == "AES")
+                received = aesDecrypt(received, derivedKey, aesIV);
+            else if (*it == "ChaCha")
+                received = chachaTransform(received, derivedKey, chachaNonce);
+        }
+        cout << "📥 Decrypted: " << received << "\n";
     }
 
     return 0;
