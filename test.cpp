@@ -37,6 +37,29 @@ pair<SecByteBlock, vector<string>> deriveKeyAndOrder(const string& pubKey) {
 
     return {derivedKey, order};
 }
+std::string encryptTwofish(const std::string& plaintext, const SecByteBlock& key, const byte iv[CryptoPP::Twofish::BLOCKSIZE]) {
+    std::string ciphertext;
+    CryptoPP::CBC_Mode<CryptoPP::Twofish>::Encryption enc;
+    enc.SetKeyWithIV(key, key.size(), iv);
+    CryptoPP::StringSource ss(plaintext, true,
+        new CryptoPP::StreamTransformationFilter(enc,
+            new CryptoPP::StringSink(ciphertext)
+        )
+    );
+    return ciphertext;
+}
+
+std::string decryptTwofish(const std::string& ciphertext, const SecByteBlock& key, const byte iv[CryptoPP::Twofish::BLOCKSIZE]) {
+    std::string plaintext;
+    CryptoPP::CBC_Mode<CryptoPP::Twofish>::Decryption dec;
+    dec.SetKeyWithIV(key, key.size(), iv);
+    CryptoPP::StringSource ss(ciphertext, true,
+        new CryptoPP::StreamTransformationFilter(dec,
+            new CryptoPP::StringSink(plaintext)
+        )
+    );
+    return plaintext;
+}
 
 // AES CBC Encrypt
 string aesEncrypt(const string& input, const SecByteBlock& key, byte iv[AES::BLOCKSIZE]) {
@@ -65,24 +88,33 @@ string chachaTransform(const string& input, const SecByteBlock& key, byte nonce[
     return output;
 }
 
-// RSA sign
+// Sign hash of the ciphertext
 string sign(const string& msg, const RSA::PrivateKey& priv) {
     AutoSeededRandomPool rng;
-    string signature;
+    SHA256 hash;
+    string digest;
+    StringSource(msg, true, new HashFilter(hash, new StringSink(digest)));
+
     RSASS<PSS, SHA256>::Signer signer(priv);
-    StringSource(msg, true, new SignerFilter(rng, signer, new StringSink(signature)));
+    string signature;
+    StringSource(digest, true, new SignerFilter(rng, signer, new StringSink(signature)));
     return signature;
 }
 
-// RSA verify
+// Verify hash of ciphertext
 bool verify(const string& msg, const string& sig, const RSA::PublicKey& pub) {
+    SHA256 hash;
+    string digest;
+    StringSource(msg, true, new HashFilter(hash, new StringSink(digest)));
+
     RSASS<PSS, SHA256>::Verifier verifier(pub);
     bool result = false;
-    StringSource(sig + msg, true, new SignatureVerificationFilter(
+    StringSource(sig + digest, true, new SignatureVerificationFilter(
         verifier, new ArraySink((byte*)&result, sizeof(result)),
         SignatureVerificationFilter::SIGNATURE_AT_BEGIN));
     return result;
 }
+
 
 int main() {
     AutoSeededRandomPool rng;
