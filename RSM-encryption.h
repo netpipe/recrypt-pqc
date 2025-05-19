@@ -125,7 +125,7 @@ private:
     }
 
     static vector<int> getMethodOrder(const string& key) {
-        vector<int> order = {0, 1, 2};
+        vector<int> order = {0, 1, 2,3};
         seed_seq seed(key.begin(), key.end());
         mt19937 rng(seed);
         shuffle(order.begin(), order.end(), rng);
@@ -198,14 +198,35 @@ int main() {
     string message = "HelloWorld123";
 
     string enc = ModuloEncryptor::encrypt(message, pub, key);
-    ModuloEncryptor::customMix(enc);
+
     cout << "customMix: " << enc << endl;
 
+    std::string e_str = pub.n.get_str(); // GMP integer to decimal string
+    // std::string right8 = e_str.substr(e_str.size() > 8 ? e_str.size() - 8 : 0);
+    std::string tag = e_str.substr(enc.size() - 8);
+    // std::string tag = sha256(enc).substr(0, 8);
+    cout << "tag: " << tag;
+    //std::string tag = right8;
+    enc.append(tag);
+
+    //sender
+    ModuloEncryptor::customMix(enc);
+
+
+    //Receiver
     ModuloEncryptor::customUnmix(enc);
-    string dec = ModuloEncryptor::decrypt(enc, priv, key);
+   // std::string rtag = enc.substr(enc.size() > 8 ? enc.size() - 8 : 0);
+    std::string extractedTag = enc.substr(enc.size() - 8);
+    //cout << "extractedTag: " << tag;
+   if (tag == extractedTag){
+    cout << "Verified: "<< endl;
+  //  std::string withoutTag = enc.substr(0, enc.size() > 8 ? enc.size() - 8 : 0);
+    std::string withoutTag = enc.substr(0, enc.size() - 8);
+   // cout << "withouttag: " << withoutTag<< endl;
+    string dec = ModuloEncryptor::decrypt(withoutTag, priv, key);
 
     cout << "Encrypted: " << enc << endl;
     cout << "Decrypted: " << dec << endl;
-
+}
     return 0;
 }
