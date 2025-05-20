@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <random>
 #include <sstream>
-
 using namespace std;
 
 class ModuloEncryptor {
@@ -30,7 +29,20 @@ public:
 
         mpz_class n = p * q;
         mpz_class phi = (p - 1) * (q - 1);
-        mpz_class e = 65537;
+//        mpz_class e = 65537;
+        // Generate a 10-bit prime (values between 512 and 1023)
+mpz_class e;
+// Try until e is between 30000 and 65535 and is coprime with phi
+do {
+    // Generate a random number in a safer range
+    e = rng.get_z_range(65536 - 30000) + 30000; // [30000, 65535]
+
+    // Find next prime ≥ e
+    mpz_nextprime(e.get_mpz_t(), e.get_mpz_t());
+
+} while (e > 65537); // Optional: keep e small for encryption efficiency
+
+
         mpz_class d;
 
         mpz_invert(d.get_mpz_t(), e.get_mpz_t(), phi.get_mpz_t());
@@ -89,6 +101,12 @@ public:
         }
     }
 
+    static void flipBytePairs(std::string& data) {
+        for (size_t i = 0; i + 1 < data.size(); i += 2) {
+            std::swap(data[i], data[i + 1]);
+        }
+    }
+
 private:
     static mpz_class generatePrime(gmp_randclass& rng, int bits) {
         mpz_class candidate;
@@ -124,13 +142,17 @@ private:
         return mpz_class("0x" + hex);
     }
 
-    static vector<int> getMethodOrder(const string& key) {
-        vector<int> order = {0, 1, 2,3};
-        seed_seq seed(key.begin(), key.end());
-        mt19937 rng(seed);
-        shuffle(order.begin(), order.end(), rng);
-        return order;
-    }
+static std::vector<int> getMethodOrder(const std::string& key, size_t limit = 4) {
+    std::vector<int> order = {0, 1, 2, 3, 4, 5};
+    std::seed_seq seed(key.begin(), key.end());
+    std::mt19937 rng(seed);
+    std::shuffle(order.begin(), order.end(), rng);
+    // Clamp the limit to avoid overflow
+    if (limit > order.size()) limit = order.size();
+    // Return only the first `limit` items
+    return std::vector<int>(order.begin(), order.begin() + limit);
+}
+
 
     // === TRANSFORMATION METHODS ===
     static void applyMethod(string& data, const string& key, int method) {
@@ -139,6 +161,8 @@ private:
             case 1: applyROT(data, 13); break;
             case 2: applySubstitution(data, key); break;
             case 3: customMix(data);  break;
+            case 4: flipBytePairs(data);  break;
+            case 5: shuffleString(data,key);  break;
         }
     }
 
@@ -148,6 +172,8 @@ private:
             case 1: applyROT(data, 26 - 13); break;
             case 2: reverseSubstitution(data, key); break;
             case 3: customUnmix(data);  break;
+            case 4: flipBytePairs(data);  break;
+            case 5: unshuffleString(data,key);  break;
         }
     }
 
@@ -161,6 +187,37 @@ private:
             if (isalpha(c))
                 c = (islower(c) ? 'a' : 'A') + (c - (islower(c) ? 'a' : 'A') + shift) % 26;
     }
+
+    static void shuffleString(std::string& data, const std::string& key) {
+        std::vector<size_t> indices(data.size());
+        std::iota(indices.begin(), indices.end(), 0);
+
+        std::seed_seq seed(key.begin(), key.end());
+        std::mt19937 rng(seed);
+        std::shuffle(indices.begin(), indices.end(), rng);
+
+        std::string shuffled = data;
+        for (size_t i = 0; i < data.size(); ++i) {
+            shuffled[i] = data[indices[i]];
+        }
+        data = shuffled;
+    }
+
+    static void unshuffleString(std::string& data, const std::string& key) {
+        std::vector<size_t> indices(data.size());
+        std::iota(indices.begin(), indices.end(), 0);
+
+        std::seed_seq seed(key.begin(), key.end());
+        std::mt19937 rng(seed);
+        std::shuffle(indices.begin(), indices.end(), rng);
+
+        std::string unshuffled = data;
+        for (size_t i = 0; i < data.size(); ++i) {
+            unshuffled[indices[i]] = data[i];  // ← reverse mapping
+        }
+        data = unshuffled;
+    }
+
     
     static void applySubstitution(string& data, const string& key) {
         string alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -188,45 +245,3 @@ private:
         }
     }
 };
-
-int main() {
-    ModuloEncryptor::PublicKey pub;
-    ModuloEncryptor::PrivateKey priv;
-    ModuloEncryptor::generateKeys(pub, priv);
-
-    string key = "supersecret";
-    string message = "HelloWorld123";
-
-    string enc = ModuloEncryptor::encrypt(message, pub, key);
-
-    cout << "customMix: " << enc << endl;
-
-    std::string e_str = pub.n.get_str(); // GMP integer to decimal string
-    // std::string right8 = e_str.substr(e_str.size() > 8 ? e_str.size() - 8 : 0);
-    std::string tag = e_str.substr(enc.size() - 8);
-    // std::string tag = sha256(enc).substr(0, 8);
-    cout << "tag: " << tag;
-    //std::string tag = right8;
-    enc.append(tag);
-
-    //sender
-    ModuloEncryptor::customMix(enc);
-
-
-    //Receiver
-    ModuloEncryptor::customUnmix(enc);
-   // std::string rtag = enc.substr(enc.size() > 8 ? enc.size() - 8 : 0);
-    std::string extractedTag = enc.substr(enc.size() - 8);
-    //cout << "extractedTag: " << tag;
-   if (tag == extractedTag){
-    cout << "Verified: "<< endl;
-  //  std::string withoutTag = enc.substr(0, enc.size() > 8 ? enc.size() - 8 : 0);
-    std::string withoutTag = enc.substr(0, enc.size() - 8);
-   // cout << "withouttag: " << withoutTag<< endl;
-    string dec = ModuloEncryptor::decrypt(withoutTag, priv, key);
-
-    cout << "Encrypted: " << enc << endl;
-    cout << "Decrypted: " << dec << endl;
-}
-    return 0;
-}
